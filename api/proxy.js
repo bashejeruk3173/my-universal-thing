@@ -10,27 +10,51 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // 2. Extract the target URL from the incoming request path or query string
-  // This supports both:
-  // /api/proxy?url=https://... OR grabbing it directly if you forward the path
-  let targetUrl = req.query.url || req.url.replace('/api/proxy/', '').replace('/api/proxy', '');
+  let targetUrl = '';
 
-  // Clean up any double slashes caused by path parsing
+  // 2. Extract target URL from query parameter or raw path
+  if (req.query.url) {
+    targetUrl = req.query.url;
+    const rawUrl = req.url;
+    const urlParamIndex = rawUrl.indexOf('url=');
+    if (urlParamIndex !== -1) {
+      const standardQueryStart = rawUrl.indexOf('&', urlParamIndex);
+      if (standardQueryStart !== -1) {
+        targetUrl += rawUrl.substring(standardQueryStart);
+      }
+    }
+  } else {
+    let rawPath = req.url;
+    if (rawPath.startsWith('/api/proxy')) {
+      rawPath = rawPath.replace('/api/proxy', '');
+    }
+    if (rawPath.startsWith('/')) {
+      rawPath = rawPath.substring(1);
+    }
+    targetUrl = rawPath;
+  }
+
+  // Clean up single slashes
   if (targetUrl.startsWith('http:/') && !targetUrl.startsWith('http://')) {
     targetUrl = targetUrl.replace('http:/', 'http://');
   } else if (targetUrl.startsWith('https:/') && !targetUrl.startsWith('https://')) {
     targetUrl = targetUrl.replace('https:/', 'https://');
   }
 
+  // Fix broken syntax variations like /&id= to /?id=
+  if (targetUrl.includes('/&')) {
+    targetUrl = targetUrl.replace('/&', '/?');
+  }
+
   if (!targetUrl || !targetUrl.startsWith('http')) {
     return res.status(400).json({ 
       error: 'Invalid target URL', 
-      usage: 'Example: https://vercel.app' 
+      detected: targetUrl
     });
   }
 
   try {
-    // 3. Spoof browser headers so the target API thinks it's a real user, not a script
+    // 3. Spoof browser headers
     const response = await axios({
       method: req.method,
       url: targetUrl,
@@ -40,10 +64,9 @@ export default async function handler(req, res) {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      timeout: 10000 // 10 second timeout
+      timeout: 15000
     });
 
-    // 4. Return the API data back to your application
     return res.status(response.status).json(response.data);
 
   } catch (error) {
